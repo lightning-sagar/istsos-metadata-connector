@@ -12,6 +12,14 @@ and exposes the results via a lightweight FastAPI service.
 
 Prototype metadata connector for istSOS SensorThings → STAC/DCAT catalogs.
 
+## How I approached it
+
+I started by reading the istSOS tutorial documentation and getting familiar with the SensorThings API entities, authentication, and request flow:
+
+- https://istsos.org/foss4g-asia/tutorial/sta_entity/
+
+From there, I tested authentication and entity endpoints in the istSOS API docs UI, then implemented the harvester and API outputs in this project.
+
 ## What this project does
 
 1. Authenticates to SensorThings (token or username/password).
@@ -181,6 +189,20 @@ docker compose up -d --build
 
 - STAC output includes `collection` and minimal `self`/`root` links.
 - DCAT output is generated as practical JSON-LD for catalog-style interoperability.
+
+## Screenshots
+
+### OAuth authorization in istSOS docs
+
+![OAuth authorization in istSOS docs](image.png)
+
+### Things endpoint test in Swagger UI
+
+![Things endpoint test in Swagger UI](WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM.jpeg)
+
+### Tutorial reference used during implementation
+
+![Tutorial reference used during implementation](WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM%20(1).jpeg)
 
 ## Terminal output (sample)
 
