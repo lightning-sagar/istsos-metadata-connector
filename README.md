@@ -194,15 +194,15 @@ docker compose up -d --build
 
 ### OAuth authorization in istSOS docs
 
-![OAuth authorization in istSOS docs](image.png)
+![OAuth authorization in istSOS docs](static/image.png)
 
 ### Things endpoint test in Swagger UI
 
-![Things endpoint test in Swagger UI](WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM.jpeg)
+![Things endpoint test in Swagger UI](static/WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM.jpeg)
 
 ### Tutorial reference used during implementation
 
-![Tutorial reference used during implementation](WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM%20(1).jpeg)
+![Tutorial reference used during implementation](static/WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM%20(1).jpeg)
 
 ## Terminal output (sample)
 
