@@ -93,3 +93,32 @@ services:
     depends_on:
       database:
         condition: service_healthy
+
+  metadata-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    environment:
+      METADATA_ENDPOINT: http://api:5000/istsos4/v1.1
+      METADATA_USERNAME: ${ISTSOS_ADMIN}
+      METADATA_PASSWORD: ${ISTSOS_ADMIN_PASSWORD}
+      METADATA_INCREMENTAL: 1
+      METADATA_OUTPUT: /data/metadata.json
+      STAC_OUTPUT: /data/stac_items.json
+      DCAT_OUTPUT: /data/dcat_catalog.json
+      METADATA_STATE_FILE: /data/metadata_state.json
+      STAC_COLLECTION_ID: istsos-datastreams
+      STAC_ROOT_HREF: http://localhost:8020/stac
+      HARVEST_INTERVAL_SECONDS: 300
+    ports:
+      - 8020:8000
+    volumes:
+      - v-metadata-connector-data:/data
+    depends_on:
+      api:
+        condition: service_started
+    working_dir: /app
+
+volumes:
+  v-metadata-connector-data:
+    name: v-metadata-connector-data

@@ -32,7 +32,7 @@ From there, I tested authentication and entity endpoints in the istSOS API docs 
 ## Project structure
 
 ```text
-foss4g/
+istsos-metadata-connector/
 ├── app/
 │   ├── __init__.py
 │   ├── harvester.py            # harvesting + transforms + CLI main
@@ -85,8 +85,19 @@ docker compose up -d --build
 
 This starts:
 
-- istSOS database/API stack
-- metadata FastAPI service (`metadata-api`) on port `8020`
+- istSOS services: `database`, `api`, `redis`, `dummy_data`
+- metadata connector service: `metadata-api` on port `8020`
+
+The metadata connector harvests from the internal compose URL:
+
+- `http://api:5000/istsos4/v1.1`
+
+Harvested outputs are persisted in the metadata service volume at:
+
+- `/data/metadata.json`
+- `/data/stac_items.json`
+- `/data/dcat_catalog.json`
+- `/data/metadata_state.json`
 
 ### 2) Test endpoints
 
@@ -94,6 +105,18 @@ This starts:
 curl http://localhost:8020/datasets
 curl http://localhost:8020/stac/items
 curl http://localhost:8020/dcat/catalog
+```
+
+### 3) Inspect service logs
+
+```bash
+docker compose logs -f metadata-api
+```
+
+### 4) Stop services
+
+```bash
+docker compose down
 ```
 
 ## Local CLI usage (without API)
@@ -164,7 +187,7 @@ If needed, run cells in sequence so credentials/token context is available.
 
 ### `401 Unauthorized`
 
-- verify endpoint is correct (`http://localhost:8018/istsos4/v1.1`)
+- verify endpoint is correct (`http://localhost:8018/istsos4/v1.1` for host access, `http://api:5000/istsos4/v1.1` inside compose)
 - verify credentials (`admin/admin` unless changed)
 - verify istSOS API container is healthy
 
