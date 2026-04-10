@@ -104,7 +104,7 @@ services:
       METADATA_PASSWORD: ${ISTSOS_ADMIN_PASSWORD}
       METADATA_INCREMENTAL: 1
       METADATA_OUTPUT: /data/metadata.json
-      STAC_OUTPUT: /data/stac_items.json
+      STAC_OUTPUT: /data/stac_catalog.json
       DCAT_OUTPUT: /data/dcat_catalog.json
       METADATA_STATE_FILE: /data/metadata_state.json
       STAC_COLLECTION_ID: istsos-datastreams

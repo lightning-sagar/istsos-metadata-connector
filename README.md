@@ -1,53 +1,41 @@
 # SensorThings Metadata Harvester + STAC/DCAT API
 
-This project collects metadata from an istSOS SensorThings API, converts it to:
+This project harvests metadata from an istSOS SensorThings API and publishes it as:
 
-- enriched metadata JSON
-- STAC Item-style FeatureCollection JSON
+- normalized metadata JSON
+- STAC catalog, collection, and item documents
 - DCAT catalog JSON-LD
 
-and exposes the results via a lightweight FastAPI service.
-
-## What problem I solved
-
-Prototype metadata connector for istSOS SensorThings → STAC/DCAT catalogs.
-
-## How I approached it
-
-I started by reading the istSOS tutorial documentation and getting familiar with the SensorThings API entities, authentication, and request flow:
-
-- https://istsos.org/foss4g-asia/tutorial/sta_entity/
-
-From there, I tested authentication and entity endpoints in the istSOS API docs UI, then implemented the harvester and API outputs in this project.
+The service exposes those views through a lightweight FastAPI application.
 
 ## What this project does
 
-1. Authenticates to SensorThings (token or username/password).
-2. Harvests entities using `$expand` (Things + Locations + Datastreams + Sensor + ObservedProperty).
-3. Produces normalized dataset records.
-4. Converts those records to STAC and DCAT views.
-5. Supports incremental harvest (only changed metadata is updated logically).
-6. Serves outputs through REST endpoints.
+1. Authenticates to SensorThings with a bearer token or username/password.
+2. Harvests `Things`, `Locations`, `Datastreams`, `Sensor`, and `ObservedProperty` using `$expand`.
+3. Normalizes each datastream into a compact metadata record.
+4. Builds a STAC landing page, collection metadata, item collections, and item documents.
+5. Builds a DCAT JSON-LD catalog.
+6. Supports incremental harvests with a persisted signature state file.
 
 ## Project structure
 
 ```text
 istsos-metadata-connector/
-├── app/
-│   ├── __init__.py
-│   ├── harvester.py            # harvesting + transforms + CLI main
-│   └── api.py                  # FastAPI application
-├── collect_sensorthings_metadata.py  # compatibility CLI wrapper
-├── Dockerfile
-├── docker-compose.yml
-├── requirements.txt
-├── test.ipynb                  # notebook workflow and quick execution
-└── fakedata2sta.py
+|-- app/
+|   |-- __init__.py
+|   |-- api.py
+|   `-- harvester.py
+|-- collect_sensorthings_metadata.py
+|-- docker-compose.yml
+|-- Dockerfile
+|-- requirements.txt
+|-- test.ipynb
+`-- README.md
 ```
 
 ## Metadata fields generated
 
-Each record includes (when available):
+Each record includes, when available:
 
 - `thing_id`
 - `thing_name`
@@ -69,59 +57,57 @@ Records without `datastream_id` are skipped.
 
 ## REST API
 
-Base URL (when using Docker Compose below): `http://localhost:8020`
+Base URL with Docker Compose: `http://localhost:8020`
 
-- `GET /datasets` → normalized metadata records
-- `GET /stac/items` → STAC FeatureCollection
-- `GET /dcat/catalog` → DCAT JSON-LD catalog
+- `GET /datasets` -> normalized metadata records
+- `GET /stac` -> STAC landing page/catalog
+- `GET /stac/conformance` -> STAC and OGC API conformance classes
+- `GET /stac/collections` -> collection list
+- `GET /stac/collections/{collectionId}` -> collection metadata
+- `GET /stac/collections/{collectionId}/items` -> collection-scoped ItemCollection
+- `GET /stac/collections/{collectionId}/items/{itemId}` -> single STAC item
+- `GET /stac/search` -> queryable item discovery
+- `POST /stac/search` -> body-based item discovery
+- `GET /stac/items` -> compatibility alias for the default collection ItemCollection
+- `GET /dcat/catalog` -> DCAT JSON-LD catalog
 
-## Quick start (Docker)
+## Quick start
 
-### 1) Start all services
+### 1. Start the stack
 
 ```bash
 docker compose up -d --build
 ```
 
-This starts:
+This starts the istSOS services plus the metadata connector on port `8020`.
 
-- istSOS services: `database`, `api`, `redis`, `dummy_data`
-- metadata connector service: `metadata-api` on port `8020`
+### 2. Inspect the outputs
 
-The metadata connector harvests from the internal compose URL:
-
-- `http://api:5000/istsos4/v1.1`
-
-Harvested outputs are persisted in the metadata service volume at:
+Harvested files are persisted under `/data` in the metadata service volume:
 
 - `/data/metadata.json`
-- `/data/stac_items.json`
+- `/data/stac_catalog.json`
 - `/data/dcat_catalog.json`
 - `/data/metadata_state.json`
 
-### 2) Test endpoints
+### 3. Test the endpoints
 
 ```bash
 curl http://localhost:8020/datasets
-curl http://localhost:8020/stac/items
+curl http://localhost:8020/stac
+curl http://localhost:8020/stac/collections
+curl http://localhost:8020/stac/collections/istsos-datastreams/items
+curl http://localhost:8020/stac/search?limit=5
 curl http://localhost:8020/dcat/catalog
 ```
 
-### 3) Inspect service logs
-
-```bash
-docker compose logs -f metadata-api
-```
-
-### 4) Stop services
+### 4. Stop the stack
 
 ```bash
 docker compose down
 ```
 
-## Local CLI usage (without API)
-
-Use the compatibility script (recommended for quick manual runs):
+## Local CLI usage
 
 ```bash
 python3 collect_sensorthings_metadata.py \
@@ -130,13 +116,13 @@ python3 collect_sensorthings_metadata.py \
   --password admin \
   --incremental \
   --output metadata.json \
-  --stac-output stac_items.json \
+  --stac-output stac_catalog.json \
   --dcat-output dcat_catalog.json \
   --stac-collection-id istsos-datastreams \
   --stac-root-href http://localhost:8020/stac
 ```
 
-Alternative auth mode:
+Alternative interactive auth:
 
 ```bash
 python3 collect_sensorthings_metadata.py --ask-login --output metadata.json
@@ -146,24 +132,20 @@ python3 collect_sensorthings_metadata.py --ask-login --output metadata.json
 
 When `--incremental` is enabled:
 
-- current records are compared with prior signatures from `metadata_state.json`
-- unchanged records are preserved
-- changed/new records are updated
-- removed datastreams disappear from latest output
+- current records are compared with stored signatures from `metadata_state.json`
+- unchanged records are reused
+- new and changed records are refreshed
+- removed datastreams disappear from the latest output
 
-State file can be customized via:
-
-```bash
---state-file metadata_state.json
-```
-
-## Environment variables (API service)
+## Environment variables
 
 Configured in `docker-compose.yml` under `metadata-api`:
 
 - `METADATA_ENDPOINT`
-- `METADATA_TOKEN` or (`METADATA_USERNAME`, `METADATA_PASSWORD`)
-- `METADATA_INCREMENTAL` (`1` or `0`)
+- `METADATA_TOKEN`
+- `METADATA_USERNAME`
+- `METADATA_PASSWORD`
+- `METADATA_INCREMENTAL`
 - `METADATA_OUTPUT`
 - `STAC_OUTPUT`
 - `DCAT_OUTPUT`
@@ -172,46 +154,37 @@ Configured in `docker-compose.yml` under `metadata-api`:
 - `STAC_ROOT_HREF`
 - `HARVEST_INTERVAL_SECONDS`
 
-## Notebook workflow
+## STAC implementation notes
 
-`test.ipynb` includes a run cell that:
+- The persisted STAC file is now a landing-page catalog, not just an item dump.
+- The API exposes a proper collection resource and collection-scoped item endpoints.
+- Items include `self`, `root`, `parent`, and `collection` links.
+- The landing page advertises STAC and OGC API conformance classes.
+- `GET /stac/search` and `POST /stac/search` provide API-style discovery over harvested items.
 
-1. asks for username/password
-2. runs the collector script
-3. saves metadata/STAC/DCAT outputs
-4. prints counts and preview records
+## Example outputs
 
-If needed, run cells in sequence so credentials/token context is available.
+CLI run:
 
-## Troubleshooting
-
-### `401 Unauthorized`
-
-- verify endpoint is correct (`http://localhost:8018/istsos4/v1.1` for host access, `http://api:5000/istsos4/v1.1` inside compose)
-- verify credentials (`admin/admin` unless changed)
-- verify istSOS API container is healthy
-
-### Empty output
-
-- ensure datastreams exist in istSOS
-- ensure auth user can read Things/Datastreams
-- check API logs:
-
-```bash
-docker compose logs -f api
-docker compose logs -f metadata-api
+```text
+Wrote 1 records to metadata.json; STAC to stac_catalog.json; DCAT to dcat_catalog.json
 ```
 
-### Rebuild after code changes
+Example STAC landing page shape:
 
-```bash
-docker compose up -d --build
+```json
+{
+  "type": "Catalog",
+  "stac_version": "1.0.0",
+  "id": "istsos-stac-catalog",
+  "title": "istSOS STAC API",
+  "links": [
+    { "rel": "self", "href": "http://localhost:8020/stac" },
+    { "rel": "data", "href": "http://localhost:8020/stac/collections" },
+    { "rel": "search", "href": "http://localhost:8020/stac/search" }
+  ]
+}
 ```
-
-## Notes
-
-- STAC output includes `collection` and minimal `self`/`root` links.
-- DCAT output is generated as practical JSON-LD for catalog-style interoperability.
 
 ## Screenshots
 
@@ -226,51 +199,3 @@ docker compose up -d --build
 ### Tutorial reference used during implementation
 
 ![Tutorial reference used during implementation](static/WhatsApp%20Image%202026-02-23%20at%2011.27.30%20AM%20(1).jpeg)
-
-## Terminal output (sample)
-
-### API response sample (`GET /datasets`)
-
-```json
-{
-  "count": 1,
-  "records": [
-    {
-      "thing_id": 2,
-      "thing_name": "lightning-sagar-FIU_VALL",
-      "datastream_name": "lightning-sagar-RSSI_FIU_VALL",
-      "description": "Water level, water temperature and water electrical conductivity recorder Ticino river",
-      "location": {
-        "lat": 46.172245,
-        "lon": 8.956099
-      },
-      "sensor_type": "lightning-sagar-Ecolog 10000",
-      "observed_property": "ground:water:signal_strength",
-      "unit_of_measurement": "RSSI",
-      "observation_type": "",
-      "sampling_frequency": "",
-      "time_range": "2024-01-21T00:00:00Z/2024-01-21T06:00:00Z",
-      "start_time": "2024-01-21T00:00:00Z",
-      "end_time": "2024-01-21T06:00:00Z",
-      "last_observation_time": "2024-01-21T06:00:00Z",
-      "datastream_id": 1
-    }
-  ],
-  "incremental": {
-    "created": 1,
-    "updated": 0,
-    "unchanged": 0,
-    "total": 1
-  }
-}
-```
-
-### CLI / notebook run sample
-
-```text
-Wrote 1 records to metadata.json; STAC to stac_items.json; DCAT to dcat_catalog.json
-Total metadata records: 1
-STAC features: 1
-DCAT datasets: 1
-[{'thing_id': 2, 'thing_name': 'lightning-sagar-FIU_VALL', 'datastream_name': 'lightning-sagar-RSSI_FIU_VALL', 'description': 'Water level, water temperature and water electrical conductivity recorder Ticino river', 'location': {'lat': 46.172245, 'lon': 8.956099}, 'sensor_type': 'lightning-sagar-Ecolog 10000', 'observed_property': 'ground:water:signal_strength', 'unit_of_measurement': 'RSSI', 'observation_type': '', 'sampling_frequency': '', 'time_range': '2024-01-21T00:00:00Z/2024-01-21T06:00:00Z', 'start_time': '2024-01-21T00:00:00Z', 'end_time': '2024-01-21T06:00:00Z', 'last_observation_time': '2024-01-21T06:00:00Z', 'datastream_id': 1}]
-```

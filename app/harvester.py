@@ -2,7 +2,7 @@ import argparse
 import getpass
 import json
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Tuple
+from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
 
@@ -52,7 +52,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--stac-output",
         default=None,
-        help="Optional output path for STAC ItemCollection JSON.",
+        help="Optional output path for STAC landing page/catalog JSON.",
     )
     parser.add_argument(
         "--dcat-output",
@@ -309,69 +309,253 @@ def collect_metadata(
     return records
 
 
+STAC_CONFORMANCE_CLASSES = [
+    "https://api.stacspec.org/v1.0.0/core",
+    "https://api.stacspec.org/v1.0.0/item-search",
+    "https://api.stacspec.org/v1.0.0/collections",
+    "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/core",
+    "http://www.opengis.net/spec/ogcapi-features-1/1.0/conf/collections",
+]
+
+
+def _normalize_root_href(root_href: str) -> str:
+    return root_href.rstrip("/")
+
+
+def _item_id(record: Dict[str, Any]) -> Optional[str]:
+    datastream_id = record.get("datastream_id")
+    if datastream_id is None:
+        return None
+    return f"datastream-{datastream_id}"
+
+
+def _build_item_geometry(record: Dict[str, Any]) -> Tuple[Optional[Dict[str, Any]], Optional[List[float]]]:
+    location = record.get("location")
+    if isinstance(location, dict) and "lat" in location and "lon" in location:
+        lat = location["lat"]
+        lon = location["lon"]
+        return {"type": "Point", "coordinates": [lon, lat]}, [lon, lat, lon, lat]
+    return None, None
+
+
+def _build_stac_item(record: Dict[str, Any], collection_id: str, root_href: str) -> Optional[Dict[str, Any]]:
+    item_id = _item_id(record)
+    if item_id is None:
+        return None
+
+    normalized_root = _normalize_root_href(root_href)
+    collection_href = f"{normalized_root}/collections/{collection_id}"
+    item_self_href = f"{collection_href}/items/{item_id}"
+    geometry, bbox = _build_item_geometry(record)
+
+    properties = {
+        "title": record.get("datastream_name") or record.get("thing_name", ""),
+        "description": record.get("description", ""),
+        "thing_id": record.get("thing_id"),
+        "thing_name": record.get("thing_name", ""),
+        "sensor_type": record.get("sensor_type", ""),
+        "observed_property": record.get("observed_property", ""),
+        "unit_of_measurement": record.get("unit_of_measurement", ""),
+        "observation_type": record.get("observation_type", ""),
+        "sampling_frequency": record.get("sampling_frequency", ""),
+        "time_range": record.get("time_range", ""),
+        "datastream_id": record.get("datastream_id"),
+        "start_datetime": record.get("start_time") or None,
+        "end_datetime": record.get("end_time") or None,
+        "datetime": record.get("last_observation_time") or None,
+    }
+
+    return {
+        "type": "Feature",
+        "stac_version": "1.0.0",
+        "id": item_id,
+        "collection": collection_id,
+        "bbox": bbox,
+        "geometry": geometry,
+        "properties": properties,
+        "links": [
+            {"rel": "self", "href": item_self_href, "type": "application/geo+json"},
+            {"rel": "root", "href": normalized_root, "type": "application/json"},
+            {"rel": "parent", "href": collection_href, "type": "application/json"},
+            {"rel": "collection", "href": collection_href, "type": "application/json"},
+        ],
+        "assets": {},
+    }
+
+
+def _compute_extent(records: Sequence[Dict[str, Any]]) -> Dict[str, Any]:
+    boxes: List[List[float]] = []
+    starts: List[str] = []
+    ends: List[str] = []
+
+    for record in records:
+        _, bbox = _build_item_geometry(record)
+        if bbox:
+            boxes.append(bbox)
+        start_time = record.get("start_time")
+        end_time = record.get("end_time")
+        if isinstance(start_time, str) and start_time:
+            starts.append(start_time)
+        if isinstance(end_time, str) and end_time:
+            ends.append(end_time)
+
+    spatial_bbox = [[-180.0, -90.0, 180.0, 90.0]]
+    if boxes:
+        spatial_bbox = [[
+            min(box[0] for box in boxes),
+            min(box[1] for box in boxes),
+            max(box[2] for box in boxes),
+            max(box[3] for box in boxes),
+        ]]
+
+    temporal_interval = [[None, None]]
+    if starts or ends:
+        temporal_interval = [[min(starts) if starts else None, max(ends) if ends else None]]
+
+    return {
+        "spatial": {"bbox": spatial_bbox},
+        "temporal": {"interval": temporal_interval},
+    }
+
+
+def _collection_summaries(records: Sequence[Dict[str, Any]]) -> Dict[str, List[str]]:
+    summaries: Dict[str, List[str]] = {}
+    for field in ("sensor_type", "observed_property", "unit_of_measurement", "thing_name"):
+        values = sorted(
+            {
+                str(record.get(field))
+                for record in records
+                if isinstance(record.get(field), str) and str(record.get(field)).strip()
+            }
+        )
+        if values:
+            summaries[field] = values
+    return summaries
+
+
+def build_stac_collection(
+    records: List[Dict[str, Any]],
+    collection_id: str,
+    root_href: str,
+) -> Dict[str, Any]:
+    normalized_root = _normalize_root_href(root_href)
+    collection_href = f"{normalized_root}/collections/{collection_id}"
+
+    return {
+        "type": "Collection",
+        "stac_version": "1.0.0",
+        "id": collection_id,
+        "title": "istSOS Datastream Metadata",
+        "description": (
+            "STAC collection exposing istSOS SensorThings datastream metadata "
+            "as geospatially discoverable items."
+        ),
+        "license": "proprietary",
+        "extent": _compute_extent(records),
+        "links": [
+            {"rel": "self", "href": collection_href, "type": "application/json"},
+            {"rel": "root", "href": normalized_root, "type": "application/json"},
+            {"rel": "parent", "href": normalized_root, "type": "application/json"},
+            {"rel": "items", "href": f"{collection_href}/items", "type": "application/geo+json"},
+        ],
+        "summaries": _collection_summaries(records),
+        "item_assets": {},
+    }
+
+
 def build_stac_item_collection(
     records: List[Dict[str, Any]],
     collection_id: str,
     root_href: str,
 ) -> Dict[str, Any]:
     features: List[Dict[str, Any]] = []
-    normalized_root = root_href.rstrip("/")
+    normalized_root = _normalize_root_href(root_href)
+    collection_href = f"{normalized_root}/collections/{collection_id}"
 
     for record in records:
-        if record.get("datastream_id") is None:
-            continue
-        item_id = f"datastream-{record.get('datastream_id')}"
-        item_self_href = f"{normalized_root}/items/{item_id}"
-        location = record.get("location")
-        geometry = None
-        bbox = None
-        if isinstance(location, dict) and "lat" in location and "lon" in location:
-            lat = location["lat"]
-            lon = location["lon"]
-            geometry = {"type": "Point", "coordinates": [lon, lat]}
-            bbox = [lon, lat, lon, lat]
-
-        properties = {
-            "thing_id": record.get("thing_id"),
-            "thing_name": record.get("thing_name", ""),
-            "description": record.get("description", ""),
-            "sensor_type": record.get("sensor_type", ""),
-            "observed_property": record.get("observed_property", ""),
-            "unit_of_measurement": record.get("unit_of_measurement", ""),
-            "observation_type": record.get("observation_type", ""),
-            "sampling_frequency": record.get("sampling_frequency", ""),
-            "time_range": record.get("time_range", ""),
-            "datastream_id": record.get("datastream_id"),
-            "start_datetime": record.get("start_time") or None,
-            "end_datetime": record.get("end_time") or None,
-            "datetime": record.get("last_observation_time") or None,
-        }
-
-        features.append(
-            {
-                "type": "Feature",
-                "stac_version": "1.0.0",
-                "id": item_id,
-                "collection": collection_id,
-                "geometry": geometry,
-                "bbox": bbox,
-                "properties": properties,
-                "links": [
-                    {"rel": "self", "href": item_self_href},
-                    {"rel": "root", "href": normalized_root},
-                ],
-                "assets": {},
-            }
-        )
+        item = _build_stac_item(record, collection_id=collection_id, root_href=root_href)
+        if item is not None:
+            features.append(item)
 
     return {
         "type": "FeatureCollection",
         "links": [
-            {"rel": "self", "href": f"{normalized_root}/items"},
-            {"rel": "root", "href": normalized_root},
+            {"rel": "self", "href": f"{collection_href}/items", "type": "application/geo+json"},
+            {"rel": "root", "href": normalized_root, "type": "application/json"},
+            {"rel": "parent", "href": collection_href, "type": "application/json"},
+            {"rel": "collection", "href": collection_href, "type": "application/json"},
         ],
+        "numberMatched": len(features),
+        "numberReturned": len(features),
         "features": features,
     }
+
+
+def build_stac_catalog(
+    records: List[Dict[str, Any]],
+    collection_id: str,
+    root_href: str,
+) -> Dict[str, Any]:
+    normalized_root = _normalize_root_href(root_href)
+    collection = build_stac_collection(records, collection_id=collection_id, root_href=root_href)
+
+    return {
+        "type": "Catalog",
+        "stac_version": "1.0.0",
+        "id": "istsos-stac-catalog",
+        "title": "istSOS STAC API",
+        "description": (
+            "Landing page for harvested istSOS SensorThings metadata exposed "
+            "through STAC collections and item discovery endpoints."
+        ),
+        "conformsTo": STAC_CONFORMANCE_CLASSES,
+        "links": [
+            {"rel": "self", "href": normalized_root, "type": "application/json"},
+            {"rel": "root", "href": normalized_root, "type": "application/json"},
+            {"rel": "data", "href": f"{normalized_root}/collections", "type": "application/json"},
+            {
+                "rel": "conformance",
+                "href": f"{normalized_root}/conformance",
+                "type": "application/json",
+            },
+            {"rel": "search", "href": f"{normalized_root}/search", "type": "application/geo+json"},
+            {"rel": "child", "href": collection["links"][0]["href"], "type": "application/json"},
+        ],
+    }
+
+
+def build_stac_collections(
+    records: List[Dict[str, Any]],
+    collection_id: str,
+    root_href: str,
+) -> Dict[str, Any]:
+    normalized_root = _normalize_root_href(root_href)
+    collection = build_stac_collection(records, collection_id=collection_id, root_href=root_href)
+    return {
+        "collections": [collection],
+        "links": [
+            {"rel": "self", "href": f"{normalized_root}/collections", "type": "application/json"},
+            {"rel": "root", "href": normalized_root, "type": "application/json"},
+            {"rel": "parent", "href": normalized_root, "type": "application/json"},
+        ],
+    }
+
+
+def build_stac_conformance() -> Dict[str, Any]:
+    return {"conformsTo": STAC_CONFORMANCE_CLASSES}
+
+
+def build_stac_item_map(
+    records: List[Dict[str, Any]],
+    collection_id: str,
+    root_href: str,
+) -> Dict[str, Dict[str, Any]]:
+    items: Dict[str, Dict[str, Any]] = {}
+    for record in records:
+        item = _build_stac_item(record, collection_id=collection_id, root_href=root_href)
+        if item is not None:
+            items[item["id"]] = item
+    return items
 
 
 def build_dcat_catalog(records: List[Dict[str, Any]]) -> Dict[str, Any]:
@@ -508,13 +692,13 @@ def main() -> Tuple[int, str]:
 
     if args.stac_output:
         stac_root_href = args.stac_root_href or f"{args.endpoint.rstrip('/')}/stac"
-        stac_collection = build_stac_item_collection(
+        stac_catalog = build_stac_catalog(
             records,
             collection_id=args.stac_collection_id,
             root_href=stac_root_href,
         )
         with open(args.stac_output, "w", encoding="utf-8") as file:
-            json.dump(stac_collection, file, indent=2, ensure_ascii=False)
+            json.dump(stac_catalog, file, indent=2, ensure_ascii=False)
             file.write("\n")
 
     if args.dcat_output:
