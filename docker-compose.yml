@@ -109,6 +109,13 @@ services:
       METADATA_STATE_FILE: /data/metadata_state.json
       STAC_COLLECTION_ID: istsos-datastreams
       STAC_ROOT_HREF: http://localhost:8020/stac
+      DCAT_CATALOG_URL: http://localhost:8020/dcat/catalog
+      DCAT_CATALOG_TITLE: istSOS DCAT Catalog
+      DCAT_CATALOG_DESCRIPTION: DCAT-AP-style catalog generated from harvested istSOS SensorThings datastream metadata.
+      DCAT_CATALOG_HOMEPAGE: http://localhost:8020/
+      DCAT_LANGUAGE: en
+      DCAT_PUBLISHER_NAME: istSOS Metadata Connector
+      DCAT_PUBLISHER_HOMEPAGE: http://localhost:8020/
       HARVEST_INTERVAL_SECONDS: 300
     ports:
       - 8020:8000

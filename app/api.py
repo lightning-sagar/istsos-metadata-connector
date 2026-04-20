@@ -45,6 +45,18 @@ def _get_config() -> Dict[str, Any]:
         "state_file": _env("METADATA_STATE_FILE", "metadata_state.json"),
         "stac_collection_id": _env("STAC_COLLECTION_ID", "istsos-datastreams"),
         "stac_root_href": _env("STAC_ROOT_HREF", "http://localhost:8020/stac"),
+        "dcat_catalog_url": _env("DCAT_CATALOG_URL", "http://localhost:8020/dcat/catalog"),
+        "dcat_catalog_title": _env("DCAT_CATALOG_TITLE", "istSOS DCAT Catalog"),
+        "dcat_catalog_description": _env(
+            "DCAT_CATALOG_DESCRIPTION",
+            "DCAT-AP-style catalog generated from harvested istSOS SensorThings datastream metadata.",
+        ),
+        "dcat_catalog_homepage": _env("DCAT_CATALOG_HOMEPAGE", "http://localhost:8020/"),
+        "dcat_language": _env("DCAT_LANGUAGE", "en"),
+        "dcat_theme_taxonomy": _env("DCAT_THEME_TAXONOMY", ""),
+        "dcat_publisher_name": _env("DCAT_PUBLISHER_NAME", "istSOS Metadata Connector"),
+        "dcat_publisher_homepage": _env("DCAT_PUBLISHER_HOMEPAGE", "http://localhost:8020/"),
+        "dcat_publisher_mbox": _env("DCAT_PUBLISHER_MBOX", ""),
         "incremental": _env("METADATA_INCREMENTAL", "1") == "1",
         "harvest_interval_seconds": int(_env("HARVEST_INTERVAL_SECONDS", "300")),
     }
@@ -116,7 +128,21 @@ def refresh_metadata(force: bool = False) -> None:
             collection_id=config["stac_collection_id"],
             root_href=config["stac_root_href"],
         )
-        dcat = build_dcat_catalog(records)
+        dcat = build_dcat_catalog(
+            records,
+            metadata={
+                "catalog_url": config["dcat_catalog_url"],
+                "title": config["dcat_catalog_title"],
+                "description": config["dcat_catalog_description"],
+                "homepage": config["dcat_catalog_homepage"],
+                "endpoint": config["endpoint"],
+                "language": config["dcat_language"],
+                "theme_taxonomy": config["dcat_theme_taxonomy"],
+                "publisher_name": config["dcat_publisher_name"],
+                "publisher_homepage": config["dcat_publisher_homepage"],
+                "publisher_mbox": config["dcat_publisher_mbox"],
+            },
+        )
 
         save_json_file(config["metadata_output"], records)
         save_json_file(config["stac_output"], stac)

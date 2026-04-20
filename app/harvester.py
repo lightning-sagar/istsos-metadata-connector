@@ -2,6 +2,7 @@ import argparse
 import getpass
 import json
 from pathlib import Path
+from urllib.parse import quote
 from typing import Any, Dict, List, Optional, Sequence, Tuple
 
 import requests
@@ -58,6 +59,53 @@ def parse_args() -> argparse.Namespace:
         "--dcat-output",
         default=None,
         help="Optional output path for DCAT JSON-LD catalog.",
+    )
+    parser.add_argument(
+        "--dcat-catalog-url",
+        default=None,
+        help="Canonical URL or URI for the generated DCAT catalog.",
+    )
+    parser.add_argument(
+        "--dcat-catalog-title",
+        default="istSOS DCAT Catalog",
+        help="Title for the generated DCAT catalog.",
+    )
+    parser.add_argument(
+        "--dcat-catalog-description",
+        default=(
+            "DCAT-AP-style catalog generated from harvested istSOS SensorThings datastream metadata."
+        ),
+        help="Description for the generated DCAT catalog.",
+    )
+    parser.add_argument(
+        "--dcat-homepage",
+        default=None,
+        help="Homepage URL advertised by the generated DCAT catalog.",
+    )
+    parser.add_argument(
+        "--dcat-language",
+        default="en",
+        help="Language tag to attach to the generated DCAT catalog and datasets.",
+    )
+    parser.add_argument(
+        "--dcat-theme-taxonomy",
+        default=None,
+        help="Optional theme taxonomy URI for the generated DCAT catalog.",
+    )
+    parser.add_argument(
+        "--dcat-publisher-name",
+        default="istSOS Metadata Connector",
+        help="Publisher name for the generated DCAT catalog and datasets.",
+    )
+    parser.add_argument(
+        "--dcat-publisher-homepage",
+        default=None,
+        help="Publisher homepage URL for the generated DCAT catalog and datasets.",
+    )
+    parser.add_argument(
+        "--dcat-publisher-mbox",
+        default=None,
+        help="Publisher mailbox for the generated DCAT catalog and datasets.",
     )
     parser.add_argument(
         "--stac-collection-id",
@@ -558,50 +606,239 @@ def build_stac_item_map(
     return items
 
 
-def build_dcat_catalog(records: List[Dict[str, Any]]) -> Dict[str, Any]:
+def _as_non_empty_string(value: Any) -> Optional[str]:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        value = value.strip()
+        return value or None
+    return str(value)
+
+
+def _unique_strings(values: Sequence[Any]) -> List[str]:
+    seen = set()
+    output: List[str] = []
+    for value in values:
+        string_value = _as_non_empty_string(value)
+        if string_value is None:
+            continue
+        if string_value in seen:
+            continue
+        seen.add(string_value)
+        output.append(string_value)
+    return output
+
+
+def _sensor_things_entity_url(endpoint: Optional[str], entity_path: str) -> Optional[str]:
+    endpoint_value = _as_non_empty_string(endpoint)
+    if endpoint_value is None:
+        return None
+    return f"{endpoint_value.rstrip('/')}/{entity_path.lstrip('/')}"
+
+
+def _build_publisher(name: Any, homepage: Any = None, mbox: Any = None) -> Optional[Dict[str, Any]]:
+    publisher_name = _as_non_empty_string(name)
+    if publisher_name is None:
+        return None
+
+    publisher: Dict[str, Any] = {
+        "@type": "foaf:Agent",
+        "foaf:name": publisher_name,
+    }
+
+    homepage_value = _as_non_empty_string(homepage)
+    if homepage_value is not None:
+        publisher["foaf:homepage"] = {"@id": homepage_value}
+
+    mbox_value = _as_non_empty_string(mbox)
+    if mbox_value is not None:
+        publisher["foaf:mbox"] = mbox_value if mbox_value.startswith("mailto:") else f"mailto:{mbox_value}"
+
+    return publisher
+
+
+def _build_temporal_coverage(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    start_time = _as_non_empty_string(record.get("start_time"))
+    end_time = _as_non_empty_string(record.get("end_time"))
+    if start_time is None and end_time is None:
+        return None
+
+    temporal: Dict[str, Any] = {"@type": "dct:PeriodOfTime"}
+    if start_time is not None:
+        temporal["schema:startDate"] = start_time
+    if end_time is not None:
+        temporal["schema:endDate"] = end_time
+    return temporal
+
+
+def _build_spatial_coverage(record: Dict[str, Any]) -> Optional[Dict[str, Any]]:
+    location = record.get("location")
+    if not isinstance(location, dict) or "lat" not in location or "lon" not in location:
+        return None
+
+    return {
+        "@type": "dct:Location",
+        "dct:conformsTo": {"@id": "http://www.opengis.net/def/crs/EPSG/0/4326"},
+        "locn:geometry": {
+            "type": "Point",
+            "coordinates": [location["lon"], location["lat"]],
+        },
+    }
+
+
+def _build_dataset_distributions(
+    record: Dict[str, Any],
+    dataset_id: str,
+    endpoint: Optional[str],
+) -> List[Dict[str, Any]]:
+    datastream_id = record.get("datastream_id")
+    if datastream_id is None:
+        return []
+
+    datastream_path = f"Datastreams({quote(str(datastream_id), safe='')})"
+    datastream_url = _sensor_things_entity_url(endpoint, datastream_path)
+    observations_url = _sensor_things_entity_url(endpoint, f"{datastream_path}/Observations")
+    if datastream_url is None and observations_url is None:
+        return []
+
+    distributions: List[Dict[str, Any]] = []
+
+    if datastream_url is not None:
+        distributions.append(
+            {
+                "@id": f"{dataset_id}#datastream",
+                "@type": "dcat:Distribution",
+                "dct:title": "SensorThings Datastream resource",
+                "dct:description": "Source datastream metadata exposed through the OGC SensorThings API.",
+                "dcat:accessURL": {"@id": datastream_url},
+                "dcat:mediaType": "application/json",
+                "dct:format": "application/json",
+                "dct:conformsTo": {"@id": "http://www.opengis.net/doc/IS/SensorThingsAPI/1.1"},
+            }
+        )
+
+    if observations_url is not None:
+        distributions.append(
+            {
+                "@id": f"{dataset_id}#observations",
+                "@type": "dcat:Distribution",
+                "dct:title": "SensorThings observations feed",
+                "dct:description": "Observations associated with the harvested datastream.",
+                "dcat:accessURL": {"@id": observations_url},
+                "dcat:downloadURL": {"@id": observations_url},
+                "dcat:mediaType": "application/json",
+                "dct:format": "application/json",
+                "dct:conformsTo": {"@id": "http://www.opengis.net/doc/IS/SensorThingsAPI/1.1"},
+            }
+        )
+
+    return distributions
+
+
+def build_dcat_catalog(
+    records: List[Dict[str, Any]],
+    metadata: Optional[Dict[str, Any]] = None,
+) -> Dict[str, Any]:
+    metadata = metadata or {}
+    catalog_id = _as_non_empty_string(metadata.get("catalog_url")) or "urn:catalog:istsos:dcat"
+    catalog_title = _as_non_empty_string(metadata.get("title")) or "istSOS DCAT Catalog"
+    catalog_description = _as_non_empty_string(metadata.get("description")) or (
+        "DCAT-AP-style catalog generated from harvested istSOS SensorThings datastream metadata."
+    )
+    endpoint = _as_non_empty_string(metadata.get("endpoint"))
+    homepage = _as_non_empty_string(metadata.get("homepage")) or endpoint
+    language = _as_non_empty_string(metadata.get("language"))
+    theme_taxonomy = _as_non_empty_string(metadata.get("theme_taxonomy"))
+    publisher = _build_publisher(
+        metadata.get("publisher_name"),
+        homepage=metadata.get("publisher_homepage") or homepage,
+        mbox=metadata.get("publisher_mbox"),
+    )
+
     datasets: List[Dict[str, Any]] = []
     for record in records:
         if record.get("datastream_id") is None:
             continue
         dataset_id = f"datastream-{record.get('datastream_id')}"
+        temporal = _build_temporal_coverage(record)
+        spatial = _build_spatial_coverage(record)
+        issued = _as_non_empty_string(record.get("start_time"))
+        modified = _as_non_empty_string(record.get("last_observation_time")) or _as_non_empty_string(
+            record.get("end_time")
+        )
+        landing_page = _sensor_things_entity_url(
+            endpoint, f"Datastreams({quote(str(record.get('datastream_id')), safe='')})"
+        )
         dataset: Dict[str, Any] = {
             "@id": dataset_id,
             "@type": "dcat:Dataset",
             "dct:identifier": dataset_id,
             "dct:title": record.get("datastream_name") or record.get("thing_name", ""),
             "dct:description": record.get("description", ""),
-            "dcat:keyword": [
-                record.get("observed_property", ""),
-                record.get("sensor_type", ""),
-            ],
-            "dct:temporal": {
-                "schema:startDate": record.get("start_time", ""),
-                "schema:endDate": record.get("end_time", ""),
-            },
+            "dcat:keyword": _unique_strings(
+                [
+                    record.get("observed_property"),
+                    record.get("sensor_type"),
+                    record.get("thing_name"),
+                    record.get("unit_of_measurement"),
+                ]
+            ),
         }
 
-        location = record.get("location")
-        if isinstance(location, dict) and "lat" in location and "lon" in location:
-            dataset["dct:spatial"] = {
-                "@type": "dct:Location",
-                "locn:geometry": {
-                    "type": "Point",
-                    "coordinates": [location["lon"], location["lat"]],
-                },
-            }
+        if temporal is not None:
+            dataset["dct:temporal"] = temporal
+        if spatial is not None:
+            dataset["dct:spatial"] = spatial
+        if issued is not None:
+            dataset["dct:issued"] = issued
+        if modified is not None:
+            dataset["dct:modified"] = modified
+        if landing_page is not None:
+            dataset["dcat:landingPage"] = {"@id": landing_page}
+        if language is not None:
+            dataset["dct:language"] = language
+        if publisher is not None:
+            dataset["dct:publisher"] = publisher
+
+        distribution_list = _build_dataset_distributions(record, dataset_id=dataset_id, endpoint=endpoint)
+        if distribution_list:
+            dataset["dcat:distribution"] = distribution_list
+
+        sampling_frequency = _as_non_empty_string(record.get("sampling_frequency"))
+        if sampling_frequency is not None:
+            dataset["dct:accrualPeriodicity"] = sampling_frequency
+
+        observation_type = _as_non_empty_string(record.get("observation_type"))
+        if observation_type is not None:
+            dataset["dct:conformsTo"] = {"@id": observation_type}
 
         datasets.append(dataset)
 
-    return {
+    catalog: Dict[str, Any] = {
         "@context": {
             "dcat": "http://www.w3.org/ns/dcat#",
             "dct": "http://purl.org/dc/terms/",
             "locn": "http://www.w3.org/ns/locn#",
             "schema": "https://schema.org/",
+            "foaf": "http://xmlns.com/foaf/0.1/",
         },
+        "@id": catalog_id,
         "@type": "dcat:Catalog",
+        "dct:title": catalog_title,
+        "dct:description": catalog_description,
         "dcat:dataset": datasets,
     }
+
+    if homepage is not None:
+        catalog["foaf:homepage"] = {"@id": homepage}
+    if publisher is not None:
+        catalog["dct:publisher"] = publisher
+    if language is not None:
+        catalog["dct:language"] = language
+    if theme_taxonomy is not None:
+        catalog["dcat:themeTaxonomy"] = {"@id": theme_taxonomy}
+
+    return catalog
 
 
 def main() -> Tuple[int, str]:
@@ -702,7 +939,21 @@ def main() -> Tuple[int, str]:
             file.write("\n")
 
     if args.dcat_output:
-        dcat_catalog = build_dcat_catalog(records)
+        dcat_catalog = build_dcat_catalog(
+            records,
+            metadata={
+                "catalog_url": args.dcat_catalog_url,
+                "title": args.dcat_catalog_title,
+                "description": args.dcat_catalog_description,
+                "homepage": args.dcat_homepage,
+                "endpoint": args.endpoint,
+                "language": args.dcat_language,
+                "theme_taxonomy": args.dcat_theme_taxonomy,
+                "publisher_name": args.dcat_publisher_name,
+                "publisher_homepage": args.dcat_publisher_homepage,
+                "publisher_mbox": args.dcat_publisher_mbox,
+            },
+        )
         with open(args.dcat_output, "w", encoding="utf-8") as file:
             json.dump(dcat_catalog, file, indent=2, ensure_ascii=False)
             file.write("\n")

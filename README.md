@@ -4,7 +4,7 @@ This project harvests metadata from an istSOS SensorThings API and publishes it 
 
 - normalized metadata JSON
 - STAC catalog, collection, and item documents
-- DCAT catalog JSON-LD
+- DCAT-AP-oriented catalog JSON-LD
 
 The service exposes those views through a lightweight FastAPI application.
 
@@ -14,7 +14,7 @@ The service exposes those views through a lightweight FastAPI application.
 2. Harvests `Things`, `Locations`, `Datastreams`, `Sensor`, and `ObservedProperty` using `$expand`.
 3. Normalizes each datastream into a compact metadata record.
 4. Builds a STAC landing page, collection metadata, item collections, and item documents.
-5. Builds a DCAT JSON-LD catalog.
+5. Builds a DCAT-AP-oriented JSON-LD catalog with dataset distributions back to SensorThings resources.
 6. Supports incremental harvests with a persisted signature state file.
 
 ## Project structure
@@ -69,7 +69,7 @@ Base URL with Docker Compose: `http://localhost:8020`
 - `GET /stac/search` -> queryable item discovery
 - `POST /stac/search` -> body-based item discovery
 - `GET /stac/items` -> compatibility alias for the default collection ItemCollection
-- `GET /dcat/catalog` -> DCAT JSON-LD catalog
+- `GET /dcat/catalog` -> DCAT-AP-oriented JSON-LD catalog
 
 ## Quick start
 
@@ -118,6 +118,9 @@ python3 collect_sensorthings_metadata.py \
   --output metadata.json \
   --stac-output stac_catalog.json \
   --dcat-output dcat_catalog.json \
+  --dcat-catalog-url http://localhost:8020/dcat/catalog \
+  --dcat-homepage http://localhost:8020/ \
+  --dcat-publisher-name "istSOS Metadata Connector" \
   --stac-collection-id istsos-datastreams \
   --stac-root-href http://localhost:8020/stac
 ```
@@ -149,6 +152,15 @@ Configured in `docker-compose.yml` under `metadata-api`:
 - `METADATA_OUTPUT`
 - `STAC_OUTPUT`
 - `DCAT_OUTPUT`
+- `DCAT_CATALOG_URL`
+- `DCAT_CATALOG_TITLE`
+- `DCAT_CATALOG_DESCRIPTION`
+- `DCAT_CATALOG_HOMEPAGE`
+- `DCAT_LANGUAGE`
+- `DCAT_THEME_TAXONOMY`
+- `DCAT_PUBLISHER_NAME`
+- `DCAT_PUBLISHER_HOMEPAGE`
+- `DCAT_PUBLISHER_MBOX`
 - `METADATA_STATE_FILE`
 - `STAC_COLLECTION_ID`
 - `STAC_ROOT_HREF`
@@ -161,6 +173,13 @@ Configured in `docker-compose.yml` under `metadata-api`:
 - Items include `self`, `root`, `parent`, and `collection` links.
 - The landing page advertises STAC and OGC API conformance classes.
 - `GET /stac/search` and `POST /stac/search` provide API-style discovery over harvested items.
+
+## DCAT implementation notes
+
+- The DCAT export now includes catalog-level metadata such as identifier, title, description, homepage, language, and publisher.
+- Each dataset includes issued/modified timestamps, landing pages, richer keywords, temporal coverage, spatial coverage, and publisher metadata.
+- Each harvested datastream is exposed as two DCAT distributions: the datastream resource itself and its observations feed.
+- The catalog remains JSON-LD, but the mapping is now closer to DCAT-AP expectations for catalog and data space interoperability.
 
 ## Example outputs
 
